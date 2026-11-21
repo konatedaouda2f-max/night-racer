@@ -1,0 +1,8 @@
+{
+  "appId": "com.konatedaouda2f.nightracer",
+  "appName": "Night Racer",
+  "webDir": "public",
+  "server": {
+    "androidScheme": "https"
+  }
+}
