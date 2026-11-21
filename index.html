@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Night Racer</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="game-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Circuit urbain</p>
+          <h1>NIGHT RACER</h1>
+        </div>
+        <div class="top-actions">
+          <button id="pause" type="button" disabled>Pause</button>
+          <button id="openSettings" class="secondary-button" type="button">Paramètres</button>
+          <button id="restart" type="button">Recommencer</button>
+        </div>
+      </header>
+
+      <section class="game-layout">
+        <aside class="stats">
+          <div class="stat">
+            <span>Temps</span>
+            <strong id="time">00:00.00</strong>
+          </div>
+          <div class="stat">
+            <span>Meilleur</span>
+            <strong id="best">--:--.--</strong>
+          </div>
+        </aside>
+
+        <div class="track-wrap">
+          <canvas id="game" width="900" height="560" aria-label="Jeu de course"></canvas>
+          <div class="race-hud" aria-label="Tableau de bord de la course">
+            <div class="hud-item">
+              <span>Niveau</span>
+              <strong id="level">1 <small>/ 100</small></strong>
+            </div>
+            <div class="hud-item">
+              <span>Vies</span>
+              <strong id="lives">3 <small>/ 3</small></strong>
+            </div>
+            <div class="hud-item">
+              <span>Vitesse</span>
+              <strong id="speed">0 <small>km/h</small></strong>
+            </div>
+          </div>
+          <div id="startOverlay" class="overlay">
+            <p>Préparez-vous</p>
+            <h2 id="startTitle">Niveau 1</h2>
+            <span id="levelHint" class="overlay-hint">Évitez les voitures et tenez jusqu'à l'arrivée.</span>
+            <button id="start" type="button">Lancer la course</button>
+          </div>
+          <div id="finishOverlay" class="overlay hidden">
+            <p id="finishLabel">Niveau terminé</p>
+            <h2 id="finishTime">00:00.00</h2>
+            <span id="finishHint" class="overlay-hint"></span>
+            <button id="nextLevel" type="button">Niveau suivant</button>
+          </div>
+          <div id="pauseOverlay" class="overlay hidden">
+            <p>En pause</p>
+            <h2>Course suspendue</h2>
+            <span class="overlay-hint">La course reprendra exactement où vous l’avez laissée.</span>
+            <div class="overlay-actions">
+              <button id="resume" type="button">Reprendre</button>
+              <button id="pauseSettings" class="secondary-button" type="button">Paramètres</button>
+            </div>
+          </div>
+          <div id="settingsOverlay" class="overlay hidden">
+            <p>Configuration</p>
+            <h2>Paramètres</h2>
+            <label class="setting-control" for="steeringSensitivity">
+              <span>Sensibilité de direction <strong id="sensitivityValue">1,0×</strong></span>
+              <input id="steeringSensitivity" type="range" min="0.5" max="2" step="0.1" value="1" />
+            </label>
+            <p class="settings-help">Réglez la réactivité du volant, du joystick ou des flèches.</p>
+            <button id="closeSettings" type="button">Terminé</button>
+          </div>
+        </div>
+        <div id="touchControls" aria-label="Commandes tactiles">
+          <div class="steering-controls">
+            <button type="button" data-control="left" aria-label="Tourner à gauche">←</button>
+            <button type="button" data-control="right" aria-label="Tourner à droite">→</button>
+          </div>
+          <div class="pedal-controls">
+            <button type="button" data-control="brake" class="brake-control">Frein</button>
+            <button type="button" data-control="accelerate" class="accelerate-control">Accélérer</button>
+          </div>
+        </div>
+      </section>
+
+      <footer>
+        <span><kbd>↑</kbd> accélérer</span>
+        <span><kbd>←</kbd><kbd>→</kbd> conduire</span>
+        <span><kbd>↓</kbd> freiner</span>
+        <span id="controllerStatus">Manette PS5 : non détectée</span>
+      </footer>
+    </main>
+    <script src="./game.js"></script>
+  </body>
+</html>
