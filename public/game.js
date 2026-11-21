@@ -19,6 +19,7 @@ const controllerStatus = document.querySelector("#controllerStatus");
 const pauseButton = document.querySelector("#pause");
 const steeringSensitivity = document.querySelector("#steeringSensitivity");
 const sensitivityValue = document.querySelector("#sensitivityValue");
+const soundEnabledInput = document.querySelector("#soundEnabled");
 
 const keys = {};
 const touchInput = { left: false, right: false, accelerate: false, brake: false };
@@ -37,12 +38,18 @@ let finishProgressMs = 0;
 let obstacleTimer = 0;
 let opponents = [];
 let obstacles = [];
+let audioContext = null;
+let engineOscillator = null;
+let engineGain = null;
+let musicInterval = null;
+let musicNoteIndex = 0;
 const totalLives = 3;
 let lives = totalLives;
 const storedSensitivity = Number(localStorage.getItem("nightRacerSteeringSensitivity"));
 let steeringMultiplier = Number.isFinite(storedSensitivity)
   ? Math.max(0.5, Math.min(2, storedSensitivity))
   : 1;
+let soundEnabled = localStorage.getItem("nightRacerSoundEnabled") !== "false";
 
 const car = { x: 450, y: 465, width: 46, height: 82, angle: 0, speed: 0, lateralVelocity: 0 };
 const maxSpeed = 1.25;
@@ -51,8 +58,44 @@ const raceDuration = 60000;
 
 if (best) bestEl.textContent = formatTime(best);
 steeringSensitivity.value = steeringMultiplier.toFixed(1);
+soundEnabledInput.checked = soundEnabled;
 updateSensitivityLabel();
 updateLevelDisplay();
+
+function getTrafficLaneX() {
+  const lanes = [210, 450, 690];
+  return lanes[Math.floor(Math.random() * lanes.length)] + (Math.random() * 28 - 14);
+}
+
+function createOpponent(index, baseSpeed) {
+  const type = index === 0 || Math.random() < 0.42 ? "motorcycle" : "car";
+  const style = ["sedan", "sport", "van", "taxi"][Math.floor(Math.random() * 4)];
+  const dimensions = type === "motorcycle"
+    ? { width: 30, height: 62 }
+    : style === "van"
+      ? { width: 52, height: 88 }
+      : style === "sport"
+        ? { width: 39, height: 70 }
+        : { width: 44, height: 78 };
+  const colors = type === "motorcycle"
+    ? ["#3895e8", "#f4a62a", "#a46deb", "#44c69a", "#e84b5f"]
+    : ["#3895e8", "#f4a62a", "#a46deb", "#44c69a", "#e84b5f", "#e7e8eb"];
+  return {
+    x: getTrafficLaneX(),
+    y: 70 - index * 155,
+    ...dimensions,
+    speed: baseSpeed + index * 0.18,
+    type,
+    style,
+    color: colors[Math.floor(Math.random() * colors.length)],
+  };
+}
+
+function respawnOpponent(opponent, y = -100) {
+  const index = Math.max(0, opponents.indexOf(opponent));
+  const baseSpeed = 2 + (currentLevel - 1) * 0.025;
+  Object.assign(opponent, createOpponent(index, baseSpeed), { y });
+}
 
 function formatTime(ms) {
   const minutes = Math.floor(ms / 60000);
@@ -67,17 +110,9 @@ function resetRace() {
   car.angle = 0;
   car.speed = 0;
   car.lateralVelocity = 0;
-  const trafficCount = Math.min(5, 1 + Math.floor((currentLevel - 1) / 20));
+  const trafficCount = Math.min(7, 2 + Math.floor((currentLevel - 1) / 15));
   const baseSpeed = 2 + (currentLevel - 1) * 0.025;
-  opponents = Array.from({ length: trafficCount }, (_, index) => ({
-    x: [220, 380, 540, 700][Math.floor(Math.random() * 4)],
-    y: 80 - index * 190,
-    width: 42,
-    height: 74,
-    speed: baseSpeed + index * 0.18,
-    type: index === 0 || Math.random() < 0.4 ? "motorcycle" : "car",
-    color: ["#3895e8", "#f4a62a", "#a46deb", "#44c69a"][index % 4],
-  }));
+  opponents = Array.from({ length: trafficCount }, (_, index) => createOpponent(index, baseSpeed));
   obstacles = [{
     x: [160, 300, 450, 600, 750][Math.floor(Math.random() * 5)],
     y: 130,
@@ -99,6 +134,7 @@ function resetRace() {
   pauseButton.textContent = "Pause";
   startOverlay.classList.add("hidden");
   finishOverlay.classList.add("hidden");
+  syncAudioState();
 }
 
 function updateSensitivityLabel() {
@@ -110,6 +146,7 @@ function pauseRace() {
   paused = true;
   pauseOverlay.classList.remove("hidden");
   pauseButton.textContent = "Reprendre";
+  syncAudioState();
 }
 
 function resumeRace() {
@@ -118,6 +155,7 @@ function resumeRace() {
   pauseOverlay.classList.add("hidden");
   settingsOverlay.classList.add("hidden");
   pauseButton.textContent = "Pause";
+  syncAudioState();
 }
 
 function openSettings() {
@@ -126,6 +164,7 @@ function openSettings() {
     paused = true;
     pauseOverlay.classList.add("hidden");
     pauseButton.textContent = "Reprendre";
+    syncAudioState();
   }
   settingsOverlay.classList.remove("hidden");
 }
@@ -140,8 +179,7 @@ function closeSettings() {
 function updateLevelDisplay() {
   levelEl.innerHTML = `${currentLevel} <small>/ 100</small>`;
   startTitle.textContent = `Niveau ${currentLevel}`;
-  const trafficCount = Math.min(5, 1 + Math.floor((currentLevel - 1) / 20));
-  levelHint.textContent = `Évitez les voitures, les motos et les obstacles. Tenez 1 minute pour finir.`;
+  levelHint.textContent = "Évitez le trafic et les obstacles. Gardez le contrôle jusqu'à l'arrivée.";
 }
 
 function updateLivesDisplay() {
@@ -218,9 +256,28 @@ function drawRoad() {
   ctx.fillStyle = asphalt;
   ctx.fillRect(90, 0, 720, canvas.height);
 
+  const roadLighting = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  roadLighting.addColorStop(0, "rgba(120, 157, 181, .12)");
+  roadLighting.addColorStop(0.35, "rgba(120, 157, 181, .015)");
+  roadLighting.addColorStop(1, "rgba(0, 0, 0, .22)");
+  ctx.fillStyle = roadLighting;
+  ctx.fillRect(90, 0, 720, canvas.height);
+
+  for (let y = -42 + (roadOffset % 52), index = 0; y < canvas.height; y += 52, index += 1) {
+    ctx.fillStyle = index % 2 === 0 ? "#d9dce0" : "#b83c4b";
+    ctx.fillRect(84, y, 7, 26);
+    ctx.fillRect(809, y, 7, 26);
+  }
+
   for (let y = -30 + (roadOffset % 52); y < canvas.height; y += 52) {
     ctx.fillStyle = "rgba(224, 232, 238, .035)";
     ctx.fillRect(96, y, 708, 1);
+  }
+
+  for (let y = -18 + (roadOffset % 104); y < canvas.height; y += 104) {
+    ctx.fillStyle = "rgba(206, 221, 231, .035)";
+    ctx.fillRect(144, y, 34, 2);
+    ctx.fillRect(716, y + 38, 42, 2);
   }
 
   ctx.fillStyle = "rgba(255,255,255,.55)";
@@ -239,10 +296,33 @@ function drawRoad() {
   }
   ctx.setLineDash([]);
 
+  drawRoadMotion();
+
   if (running || elapsed >= raceDuration) {
     const progress = Math.min(finishProgressMs / raceDuration, 1);
     drawFinishLine(-70 + progress * (car.y + 70));
   }
+}
+
+function drawRoadMotion() {
+  const speedRatio = car.speed / maxSpeed;
+  if (!running || speedRatio < 0.62) return;
+
+  const opacity = Math.min(0.22, (speedRatio - 0.62) * 0.45);
+  const offset = (roadOffset * 2.4) % 112;
+  ctx.save();
+  ctx.strokeStyle = `rgba(199, 222, 239, ${opacity})`;
+  ctx.lineWidth = 2;
+  for (let index = 0; index < 5; index += 1) {
+    const y = (index * 112 + offset) % canvas.height;
+    ctx.beginPath();
+    ctx.moveTo(124 + (index % 2) * 12, y);
+    ctx.lineTo(157 + (index % 2) * 12, y - 18);
+    ctx.moveTo(743 - (index % 2) * 12, y + 34);
+    ctx.lineTo(776 - (index % 2) * 12, y + 16);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawRoadside() {
@@ -258,9 +338,12 @@ function drawRoadside() {
 
       ctx.fillStyle = "rgba(248, 190, 104, .28)";
       for (let windowY = y - 105 * size; windowY < y - 18 * size; windowY += 24 * size) {
+        ctx.shadowColor = "rgba(255, 190, 104, .25)";
+        ctx.shadowBlur = 7 * size;
         ctx.fillRect(buildingX + 12, windowY, 8 * size, 10 * size);
         ctx.fillRect(buildingX + 38, windowY, 8 * size, 10 * size);
       }
+      ctx.shadowBlur = 0;
 
       ctx.fillStyle = "#41484a";
       ctx.fillRect(x - 2, y - 40 * size, 5 * size, 40 * size);
@@ -320,17 +403,23 @@ function drawCar(vehicle, color, isPlayer) {
   ctx.save();
   ctx.translate(vehicle.x, vehicle.y);
   ctx.rotate(isPlayer ? vehicle.angle : 0);
+  const width = vehicle.width || 46;
+  const height = vehicle.height || 82;
 
   ctx.fillStyle = "rgba(0, 0, 0, .35)";
   ctx.beginPath();
-  ctx.ellipse(3, 5, vehicle.width * 0.72, vehicle.height * 0.48, 0, 0, Math.PI * 2);
+  ctx.ellipse(3, 5, width * 0.72, height * 0.48, 0, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.fillStyle = "#080b0f";
-  ctx.fillRect(-vehicle.width / 2 - 5, -22, 8, 35);
-  ctx.fillRect(vehicle.width / 2 - 3, -22, 8, 35);
-  ctx.fillRect(-vehicle.width / 2 - 5, 18, 8, 35);
-  ctx.fillRect(vehicle.width / 2 - 3, 18, 8, 35);
+  for (const wheelY of [-height * 0.29, height * 0.2]) {
+    ctx.fillRect(-width / 2 - 4, wheelY, 7, height * 0.24);
+    ctx.fillRect(width / 2 - 3, wheelY, 7, height * 0.24);
+    ctx.fillStyle = "#77818a";
+    ctx.fillRect(-width / 2 - 2, wheelY + 4, 2, height * 0.12);
+    ctx.fillRect(width / 2, wheelY + 4, 2, height * 0.12);
+    ctx.fillStyle = "#080b0f";
+  }
 
   const bodyPaint = ctx.createLinearGradient(-vehicle.width / 2, 0, vehicle.width / 2, 0);
   bodyPaint.addColorStop(0, "#20252b");
@@ -338,7 +427,7 @@ function drawCar(vehicle, color, isPlayer) {
   bodyPaint.addColorStop(0.72, color);
   bodyPaint.addColorStop(1, "#232931");
   ctx.fillStyle = bodyPaint;
-  roundedRect(-vehicle.width / 2, -vehicle.height / 2, vehicle.width, vehicle.height, 12);
+  roundedRect(-width / 2, -height / 2, width, height, vehicle.style === "van" ? 7 : 12);
   ctx.fill();
 
   const glass = ctx.createLinearGradient(0, -25, 0, 4);
@@ -346,20 +435,49 @@ function drawCar(vehicle, color, isPlayer) {
   glass.addColorStop(0.55, "#476575");
   glass.addColorStop(1, "#243944");
   ctx.fillStyle = glass;
-  roundedRect(-15, -24, 30, 24, 6);
+  const cabinWidth = vehicle.style === "van" ? width * 0.7 : width * 0.64;
+  const cabinHeight = vehicle.style === "sport" ? height * 0.22 : height * 0.29;
+  roundedRect(-cabinWidth / 2, -height * 0.33, cabinWidth, cabinHeight, 6);
   ctx.fill();
   ctx.fillStyle = "#263846";
-  roundedRect(-15, 8, 30, 19, 5);
+  roundedRect(-cabinWidth / 2, height * 0.1, cabinWidth, height * 0.22, 5);
+  ctx.fill();
+
+  ctx.fillStyle = "#101820";
+  roundedRect(-cabinWidth * 0.34, -height * 0.03, cabinWidth * 0.68, 3, 1);
+  ctx.fill();
+  ctx.fillStyle = bodyPaint;
+  roundedRect(-width / 2 - 3, -height * 0.2, 5, 9, 2);
+  ctx.fill();
+  roundedRect(width / 2 - 2, -height * 0.2, 5, 9, 2);
   ctx.fill();
 
   ctx.fillStyle = "#fff5ca";
-  ctx.fillRect(-16, -40, 8, 5);
-  ctx.fillRect(8, -40, 8, 5);
+  ctx.shadowColor = "#ffe39b";
+  ctx.shadowBlur = isPlayer ? 13 : 7;
+  ctx.fillRect(-width * 0.36, -height / 2 + 3, 7, 5);
+  ctx.fillRect(width * 0.2, -height / 2 + 3, 7, 5);
   ctx.fillStyle = "#ff3449";
-  ctx.fillRect(-16, 36, 8, 5);
-  ctx.fillRect(8, 36, 8, 5);
+  ctx.shadowColor = "#ff2948";
+  ctx.shadowBlur = 9;
+  ctx.fillRect(-width * 0.36, height / 2 - 8, 7, 5);
+  ctx.fillRect(width * 0.2, height / 2 - 8, 7, 5);
+  ctx.shadowBlur = 0;
   ctx.fillStyle = "rgba(255,255,255,.22)";
-  ctx.fillRect(-vehicle.width / 2 + 5, -32, 2, 18);
+  ctx.fillRect(-width / 2 + 5, -height * 0.38, 2, height * 0.3);
+
+  if (vehicle.style === "van") {
+    ctx.fillStyle = "rgba(225, 238, 245, .5)";
+    ctx.fillRect(-width / 2 + 3, -height * 0.06, 3, height * 0.16);
+    ctx.fillRect(width / 2 - 6, -height * 0.06, 3, height * 0.16);
+  } else if (vehicle.style === "sport") {
+    ctx.fillStyle = "#252b32";
+    ctx.fillRect(-width * 0.42, height * 0.36, width * 0.84, 3);
+  } else if (vehicle.style === "taxi") {
+    ctx.fillStyle = "#ffe47a";
+    roundedRect(-7, -height * 0.08, 14, 6, 2);
+    ctx.fill();
+  }
   ctx.restore();
 }
 
@@ -375,6 +493,14 @@ function drawMotorcycle(vehicle) {
   ctx.ellipse(0, -23, 6, 11, 0, 0, Math.PI * 2);
   ctx.ellipse(0, 23, 6, 11, 0, 0, Math.PI * 2);
   ctx.fill();
+
+  ctx.fillStyle = "#d4dde5";
+  ctx.shadowColor = "#fff0bd";
+  ctx.shadowBlur = 12;
+  ctx.beginPath();
+  ctx.ellipse(0, -18, 4, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
 
   ctx.strokeStyle = "#aebac5";
   ctx.lineWidth = 3;
@@ -445,13 +571,107 @@ function drawOpponent(opponent) {
   if (opponent.type === "motorcycle") {
     drawMotorcycle(opponent);
   } else {
-    drawCar(opponent, opponent.color, false);
+    drawCar(opponent, opponent.style === "taxi" ? "#e5b933" : opponent.color, false);
   }
+}
+
+function ensureAudio() {
+  if (!soundEnabled) return false;
+  if (!audioContext) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) {
+      soundEnabled = false;
+      soundEnabledInput.checked = false;
+      soundEnabledInput.disabled = true;
+      return false;
+    }
+    audioContext = new AudioContextClass();
+    engineOscillator = audioContext.createOscillator();
+    engineGain = audioContext.createGain();
+    const engineFilter = audioContext.createBiquadFilter();
+    engineOscillator.type = "sawtooth";
+    engineOscillator.frequency.value = 45;
+    engineFilter.type = "lowpass";
+    engineFilter.frequency.value = 240;
+    engineGain.gain.value = 0.0001;
+    engineOscillator.connect(engineFilter);
+    engineFilter.connect(engineGain);
+    engineGain.connect(audioContext.destination);
+    engineOscillator.start();
+  }
+  if (audioContext.state === "suspended") {
+    audioContext.resume().catch((error) => console.warn("Impossible de démarrer le son du jeu.", error));
+  }
+  return true;
+}
+
+function playTone(frequency, duration, volume = 0.04, type = "triangle") {
+  if (!ensureAudio()) return;
+  const oscillator = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  const now = audioContext.currentTime;
+  oscillator.type = type;
+  oscillator.frequency.setValueAtTime(frequency, now);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(volume, now + 0.025);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+  oscillator.connect(gain);
+  gain.connect(audioContext.destination);
+  oscillator.start(now);
+  oscillator.stop(now + duration + 0.03);
+}
+
+function syncAudioState() {
+  if (!soundEnabled || !ensureAudio()) {
+    if (engineGain && audioContext) {
+      engineGain.gain.setTargetAtTime(0.0001, audioContext.currentTime, 0.08);
+    }
+    if (musicInterval) {
+      clearInterval(musicInterval);
+      musicInterval = null;
+    }
+    return;
+  }
+
+  const active = running && !paused;
+  const now = audioContext.currentTime;
+  engineGain.gain.setTargetAtTime(active ? 0.018 + (car.speed / maxSpeed) * 0.035 : 0.0001, now, 0.08);
+  engineOscillator.frequency.setTargetAtTime(active ? 48 + (car.speed / maxSpeed) * 110 : 45, now, 0.08);
+
+  if (!active && musicInterval) {
+    clearInterval(musicInterval);
+    musicInterval = null;
+    return;
+  }
+  if (active && !musicInterval) {
+    const melody = [659, 0, 784, 880, 0, 784, 659, 0, 587, 659, 0, 784, 880, 0, 784, 659];
+    musicInterval = setInterval(() => {
+      const note = melody[musicNoteIndex % melody.length];
+      if (note) playTone(note, 0.2, 0.018);
+      if (musicNoteIndex % 4 === 0) playTone(110, 0.16, 0.012, "sine");
+      musicNoteIndex += 1;
+    }, 280);
+  }
+}
+
+function playCrashSound() {
+  playTone(115, 0.22, 0.1, "sawtooth");
+  playTone(78, 0.28, 0.07, "square");
+}
+
+function playFinishJingle() {
+  [523, 659, 784].forEach((note, index) => {
+    setTimeout(() => playTone(note, 0.32, 0.04), index * 160);
+  });
 }
 
 function drawObstacle(obstacle) {
   ctx.save();
   ctx.translate(obstacle.x, obstacle.y);
+  ctx.fillStyle = "rgba(0, 0, 0, .35)";
+  ctx.beginPath();
+  ctx.ellipse(2, 11, obstacle.type === "oil" ? 25 : 19, 8, 0, 0, Math.PI * 2);
+  ctx.fill();
   if (obstacle.type === "oil") {
     ctx.fillStyle = "rgba(8, 12, 17, .9)";
     ctx.beginPath();
@@ -494,6 +714,11 @@ function update(delta) {
   if (pad) {
     const startPressed = pad.buttons.map((button) => button.pressed);
     previousButtons = startPressed;
+  }
+
+  if (soundEnabled && audioContext && engineOscillator && !paused) {
+    const speedRatio = car.speed / maxSpeed;
+    engineOscillator.frequency.setTargetAtTime(48 + speedRatio * 110, audioContext.currentTime, 0.12);
   }
 
   if (!running || paused) return;
@@ -551,9 +776,7 @@ function update(delta) {
   for (const opponent of opponents) {
     opponent.y += (opponent.speed + car.speed * 0.018) * movementFactor * (delta / 16.67);
     if (opponent.y > 620) {
-      opponent.y = -90;
-      opponent.x = [220, 380, 540, 700][Math.floor(Math.random() * 4)];
-      opponent.type = Math.random() < 0.4 ? "motorcycle" : "car";
+      respawnOpponent(opponent, -90);
     }
   }
 
@@ -575,6 +798,7 @@ function update(delta) {
       && Math.abs(car.y - obstacle.y) < (obstacle.type === "oil" ? 42 : 48);
     if (hit) {
       car.speed *= obstacle.type === "oil" ? 0.55 : 0.68;
+      playCrashSound();
       loseLife();
       return false;
     }
@@ -600,8 +824,8 @@ function update(delta) {
     if (dx < hitWidth && dy < hitHeight) {
       car.speed *= 0.72;
       car.x += car.x < opponent.x ? -8 : 8;
-      opponent.y = -100;
-      opponent.x = [220, 380, 540, 700][Math.floor(Math.random() * 4)];
+      playCrashSound();
+      respawnOpponent(opponent);
       loseLife();
       break;
     }
@@ -618,6 +842,7 @@ function endRaceWithoutLives() {
   finishHint.textContent = `Vous avez perdu vos 3 vies au niveau ${currentLevel}. Réessayez pour le terminer.`;
   nextLevelButton.textContent = `Réessayer le niveau ${currentLevel}`;
   finishOverlay.classList.remove("hidden");
+  syncAudioState();
 }
 
 function finishRace() {
@@ -645,6 +870,8 @@ function finishRace() {
   }
   updateLevelDisplay();
   finishOverlay.classList.remove("hidden");
+  syncAudioState();
+  playFinishJingle();
 }
 
 let previous = performance.now();
@@ -680,6 +907,11 @@ steeringSensitivity.addEventListener("input", () => {
   steeringMultiplier = Number(steeringSensitivity.value);
   localStorage.setItem("nightRacerSteeringSensitivity", steeringMultiplier.toFixed(1));
   updateSensitivityLabel();
+});
+soundEnabledInput.addEventListener("change", () => {
+  soundEnabled = soundEnabledInput.checked;
+  localStorage.setItem("nightRacerSoundEnabled", String(soundEnabled));
+  syncAudioState();
 });
 
 for (const button of document.querySelectorAll("#touchControls [data-control]")) {

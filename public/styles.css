@@ -175,6 +175,15 @@ canvas { width: 100%; height: auto; display: block; }
 .setting-control strong { color: #ff6a82; font-variant-numeric: tabular-nums; }
 .setting-control input { width: 100%; accent-color: #ef294f; cursor: pointer; }
 .settings-help { margin: 0 20px 24px; color: #8293a8; font-size: 13px; }
+.sound-setting {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 20px 22px;
+  color: #d7e2ee;
+  cursor: pointer;
+}
+.sound-setting input { width: 18px; height: 18px; accent-color: #ef294f; }
 .back-link,
 .privacy-link { color: #91a6be; text-decoration: underline; text-underline-offset: 3px; }
 .privacy-link { font-size: 12px; }
